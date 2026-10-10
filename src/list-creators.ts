@@ -41,10 +41,12 @@ type ScoredRow = {
 // array casariam pelo texto. Aqui o tipo JSON também precisa bater, inteiro e
 // real contam como número, e objeto ou array nunca casam (=== compara referência).
 const SAME_AS_JS_STRICT_EQUAL = `
-  (CASE WHEN creator_niche.type IN ('integer', 'real') THEN 'number' ELSE creator_niche.type END)
-    = (CASE WHEN campaign_niche.type IN ('integer', 'real') THEN 'number' ELSE campaign_niche.type END)
-  AND creator_niche.type NOT IN ('object', 'array')
-  AND creator_niche.value IS campaign_niche.value`;
+  creator_niche.value IS campaign_niche.value
+  AND (
+    creator_niche.type = campaign_niche.type
+    OR (creator_niche.type IN ('integer', 'real') AND campaign_niche.type IN ('integer', 'real'))
+  )
+  AND creator_niche.type NOT IN ('object', 'array')`;
 
 // Uma ida ao banco para a campanha e outra para a lista inteira, já pontuada e
 // ordenada. O número de queries não cresce com a quantidade de criadores.

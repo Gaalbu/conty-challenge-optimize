@@ -36,6 +36,16 @@ type ScoredRow = {
   deliveries_90d: number | bigint;
 };
 
+// Igualdade do === do JavaScript, que a versão original usa nos nichos. No
+// json_each, true vira 1 e casaria com o número 1; null = null dá NULL; objeto e
+// array casariam pelo texto. Aqui o tipo JSON também precisa bater, inteiro e
+// real contam como número, e objeto ou array nunca casam (=== compara referência).
+const SAME_AS_JS_STRICT_EQUAL = `
+  (CASE WHEN creator_niche.type IN ('integer', 'real') THEN 'number' ELSE creator_niche.type END)
+    = (CASE WHEN campaign_niche.type IN ('integer', 'real') THEN 'number' ELSE campaign_niche.type END)
+  AND creator_niche.type NOT IN ('object', 'array')
+  AND creator_niche.value IS campaign_niche.value`;
+
 // Uma ida ao banco para a campanha e outra para a lista inteira, já pontuada e
 // ordenada. O número de queries não cresce com a quantidade de criadores.
 const LIST_SQL = `
@@ -48,7 +58,7 @@ FROM (
       SELECT COUNT(*)
       FROM json_each(?) AS campaign_niche
       JOIN json_each(c.niches_json) AS creator_niche
-        ON creator_niche.value = campaign_niche.value
+        ON ${SAME_AS_JS_STRICT_EQUAL}
     ) AS niche_score,
     COALESCE(reach.latest_reach, 0) AS latest_reach,
     COALESCE(recent.deliveries_90d, 0) AS deliveries_90d

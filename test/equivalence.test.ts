@@ -62,4 +62,16 @@ describe("listagem igual à implementação original", () => {
     }
     await expectSameAsOriginal(db, "cmp_t");
   });
+
+  it("compara nichos com o === do JavaScript: true não casa com 1, null casa com null, objeto nunca casa", async () => {
+    const db = openDatabase(":memory:");
+    db.prepare("INSERT INTO campaigns VALUES (?, ?, ?)").run("cmp_j", "Tipos", JSON.stringify([1, "1", true, null, 2.0, { a: 1 }, [1]]));
+    const niches: Record<string, unknown[]> = {
+      a_true: [true], b_one: [1], c_text: ["1"], d_null: [null], e_real: [2], f_obj: [{ a: 1 }], g_arr: [[1]], h_false: [false],
+    };
+    for (const [id, list] of Object.entries(niches)) {
+      db.prepare("INSERT INTO creators VALUES (?, ?, ?, ?)").run(id, id, JSON.stringify(list), "");
+    }
+    await expectSameAsOriginal(db, "cmp_j");
+  });
 });

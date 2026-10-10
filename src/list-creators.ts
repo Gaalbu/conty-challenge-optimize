@@ -43,7 +43,9 @@ FROM (
     COALESCE(recent.deliveries_90d, 0) AS deliveries_90d
   FROM creators AS c
   LEFT JOIN (
-    SELECT sa.creator_id, SUM(latest.views) AS latest_reach
+    -- TOTAL soma em ponto flutuante, como a soma em JS da versão anterior; SUM
+    -- devolve inteiro de 64 bits e o driver recusa ler acima do inteiro seguro.
+    SELECT sa.creator_id, TOTAL(latest.views) AS latest_reach
     FROM social_accounts AS sa
     JOIN (
       SELECT

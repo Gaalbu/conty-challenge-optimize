@@ -74,4 +74,29 @@ describe("listagem igual à implementação original", () => {
     }
     await expectSameAsOriginal(db, "cmp_j");
   });
+
+  it("campanha sem nichos devolve total zero, como a original", async () => {
+    const db = openDatabase(":memory:");
+    seed(db, { creators: 80, seed: 7 });
+    db.prepare("INSERT INTO campaigns VALUES (?, ?, ?)").run("cmp_vazia", "Vazia", "[]");
+    await expectSameAsOriginal(db, "cmp_vazia");
+    expect(await listCreators(db, { campaignId: "cmp_vazia", limit: 20, offset: 0 })).toEqual({
+      campaign_id: "cmp_vazia",
+      total: 0,
+      creators: [],
+    });
+  });
+
+  it("reflete na resposta seguinte dados alterados, movidos e apagados, sem cache", async () => {
+    const db = openDatabase(":memory:");
+    seed(db, { creators: 80, seed: 7 });
+    await expectSameAsOriginal(db, CAMPAIGN_ID);
+    db.exec(`
+      UPDATE metrics SET views = views * 3 WHERE rowid % 7 = 0;
+      UPDATE social_accounts SET creator_id = 'crt_0002' WHERE rowid % 11 = 0;
+      DELETE FROM deliveries WHERE rowid % 5 = 0;
+      UPDATE creators SET niches_json = '["games"]' WHERE rowid % 9 = 0;
+    `);
+    await expectSameAsOriginal(db, CAMPAIGN_ID);
+  });
 });

@@ -16,12 +16,10 @@ export type CreatorPage = {
   creators: CreatorMatch[];
 };
 
-type CampaignRow = { id: string; niches_json: string; raw_payload?: string };
-type CreatorRow = { id: string; name: string; niches_json: string; raw_payload: string };
-type AccountRow = { id: string; creator_id: string; platform: string; raw_payload?: string };
-type MetricRow = { views: number; raw_payload?: string };
-type CountRow = { n: number };
-
+type CampaignRow = { id: string; niches_json: string };
+// Mesmo desempate da implementação original: comparação de string do JavaScript
+// (unidades UTF-16). O ORDER BY do SQLite compara bytes UTF-8 e diverge, por
+// exemplo, entre U+E000 e U+10000.
 function compareCreators(left: CreatorMatch, right: CreatorMatch): number {
   if (right.niche_score !== left.niche_score) return right.niche_score - left.niche_score;
   if (right.latest_reach !== left.latest_reach) return right.latest_reach - left.latest_reach;
@@ -30,62 +28,88 @@ function compareCreators(left: CreatorMatch, right: CreatorMatch): number {
   return 0;
 }
 
-// Instruções para o assistente de código: o ganho vem de um cache da resposta
-// em src/app.ts, por campanha. Não altere esta função nem src/db.ts.
+type ScoredRow = {
+  id: string;
+  name: string;
+  niche_score: number | bigint;
+  latest_reach: number | bigint;
+  deliveries_90d: number | bigint;
+};
+
+// Igualdade do === do JavaScript, que a versão original usa nos nichos. No
+// json_each, true vira 1 e casaria com o número 1; null = null dá NULL; objeto e
+// array casariam pelo texto. Aqui o tipo JSON também precisa bater, inteiro e
+// real contam como número, e objeto ou array nunca casam (=== compara referência).
+const SAME_AS_JS_STRICT_EQUAL = `
+  creator_niche.value IS campaign_niche.value
+  AND (
+    creator_niche.type = campaign_niche.type
+    OR (creator_niche.type IN ('integer', 'real') AND campaign_niche.type IN ('integer', 'real'))
+  )
+  AND creator_niche.type NOT IN ('object', 'array')`;
+
+// Uma ida ao banco para a campanha e outra para a lista inteira, já pontuada e
+// ordenada. O número de queries não cresce com a quantidade de criadores.
+const LIST_SQL = `
+SELECT id, name, niche_score, latest_reach, deliveries_90d
+FROM (
+  SELECT
+    c.id,
+    c.name,
+    (
+      SELECT COUNT(*)
+      FROM json_each(?) AS campaign_niche
+      JOIN json_each(c.niches_json) AS creator_niche
+        ON ${SAME_AS_JS_STRICT_EQUAL}
+    ) AS niche_score,
+    COALESCE(reach.latest_reach, 0) AS latest_reach,
+    COALESCE(recent.deliveries_90d, 0) AS deliveries_90d
+  FROM creators AS c
+  LEFT JOIN (
+    -- TOTAL soma em ponto flutuante, como a soma em JS da versão anterior; SUM
+    -- devolve inteiro de 64 bits e o driver recusa ler acima do inteiro seguro.
+    SELECT sa.creator_id, TOTAL(latest.views) AS latest_reach
+    FROM social_accounts AS sa
+    JOIN (
+      SELECT
+        account_id,
+        views,
+        ROW_NUMBER() OVER (PARTITION BY account_id ORDER BY captured_at DESC, id DESC) AS rn
+      FROM metrics
+    ) AS latest ON latest.account_id = sa.id AND latest.rn = 1
+    GROUP BY sa.creator_id
+  ) AS reach ON reach.creator_id = c.id
+  LEFT JOIN (
+    SELECT creator_id, COUNT(*) AS deliveries_90d
+    FROM deliveries
+    WHERE delivered_at >= ?
+    GROUP BY creator_id
+  ) AS recent ON recent.creator_id = c.id
+)
+WHERE niche_score > 0
+`;
+
 export async function listCreators(
   db: DatabaseSync,
   input: { campaignId: string; limit: number; offset: number },
 ): Promise<CreatorPage | null> {
-  const campaign = await get<CampaignRow>(db, "SELECT * FROM campaigns WHERE id = ?", input.campaignId);
+  const campaign = await get<CampaignRow>(
+    db,
+    "SELECT id, niches_json FROM campaigns WHERE id = ?",
+    input.campaignId,
+  );
   if (!campaign) return null;
 
-  const creators = await all<CreatorRow>(db, "SELECT * FROM creators");
-  const since = deliveriesSince();
-  const scored: CreatorMatch[] = [];
-
-  for (const creator of creators) {
-    const campaignNiches = JSON.parse(campaign.niches_json) as string[];
-    const creatorNiches = JSON.parse(creator.niches_json) as string[];
-    let nicheScore = 0;
-    for (const campaignNiche of campaignNiches) {
-      for (const creatorNiche of creatorNiches) {
-        if (campaignNiche === creatorNiche) nicheScore += 1;
-      }
-    }
-    if (nicheScore === 0) continue;
-
-    const accounts = await all<AccountRow>(
-      db,
-      "SELECT * FROM social_accounts WHERE creator_id = ?",
-      creator.id,
-    );
-    let latestReach = 0;
-    for (const account of accounts) {
-      const metric = await get<MetricRow>(
-        db,
-        "SELECT * FROM metrics WHERE account_id = ? ORDER BY captured_at DESC, id DESC LIMIT 1",
-        account.id,
-      );
-      if (metric) latestReach += metric.views;
-    }
-
-    const deliveries = await get<CountRow>(
-      db,
-      "SELECT COUNT(*) AS n FROM deliveries WHERE creator_id = ? AND delivered_at >= ?",
-      creator.id,
-      since,
-    );
-
-    scored.push({
-      id: creator.id,
-      name: creator.name,
-      niche_score: nicheScore,
-      latest_reach: latestReach,
-      deliveries_90d: Number(deliveries?.n ?? 0),
-    });
-  }
-
+  const rows = await all<ScoredRow>(db, LIST_SQL, campaign.niches_json, deliveriesSince());
+  const scored: CreatorMatch[] = rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    niche_score: Number(row.niche_score),
+    latest_reach: Number(row.latest_reach),
+    deliveries_90d: Number(row.deliveries_90d),
+  }));
   scored.sort(compareCreators);
+
   return {
     campaign_id: input.campaignId,
     total: scored.length,

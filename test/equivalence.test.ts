@@ -34,6 +34,15 @@ describe("listagem igual à implementação original", () => {
     await expectSameAsOriginal(db, CAMPAIGN_ID);
   });
 
+  it("desempata id na ordem de string do JavaScript (UTF-16), não na de bytes do SQLite", async () => {
+    const db = openDatabase(":memory:");
+    db.prepare("INSERT INTO campaigns VALUES (?, ?, ?)").run("cmp_u", "Unicode", '["moda"]');
+    for (const id of ["", "\u{10000}", "a", "\u{1F600}", "￿"]) {
+      db.prepare("INSERT INTO creators VALUES (?, ?, ?, ?)").run(id, id, '["moda"]', "");
+    }
+    await expectSameAsOriginal(db, "cmp_u");
+  });
+
   it("empates de score e alcance, contas sem métrica, métrica empatada e nicho repetido", async () => {
     const db = openDatabase(":memory:");
     db.prepare("INSERT INTO campaigns VALUES (?, ?, ?)").run("cmp_t", "Empates", '["beleza","moda","moda"]');

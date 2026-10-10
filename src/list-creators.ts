@@ -17,6 +17,17 @@ export type CreatorPage = {
 };
 
 type CampaignRow = { id: string; niches_json: string };
+// Mesmo desempate da implementação original: comparação de string do JavaScript
+// (unidades UTF-16). O ORDER BY do SQLite compara bytes UTF-8 e diverge, por
+// exemplo, entre U+E000 e U+10000.
+function compareCreators(left: CreatorMatch, right: CreatorMatch): number {
+  if (right.niche_score !== left.niche_score) return right.niche_score - left.niche_score;
+  if (right.latest_reach !== left.latest_reach) return right.latest_reach - left.latest_reach;
+  if (left.id < right.id) return -1;
+  if (left.id > right.id) return 1;
+  return 0;
+}
+
 type ScoredRow = {
   id: string;
   name: string;
@@ -64,7 +75,6 @@ FROM (
   ) AS recent ON recent.creator_id = c.id
 )
 WHERE niche_score > 0
-ORDER BY niche_score DESC, latest_reach DESC, id ASC
 `;
 
 export async function listCreators(
@@ -86,6 +96,7 @@ export async function listCreators(
     latest_reach: Number(row.latest_reach),
     deliveries_90d: Number(row.deliveries_90d),
   }));
+  scored.sort(compareCreators);
 
   return {
     campaign_id: input.campaignId,
